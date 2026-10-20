@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Validador de Suplentes - IMSS Colima - Opcion B D1</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+<div class="max-w-7xl mx-auto p-6">
+  <h1 class="text-3xl font-bold text-gray-800">Validador de Contratos Suplentes - IMSS Colima</h1>
+  <p class="text-gray-600 mt-2">Opcion B - Cloudflare D1 | Valida 9,129 registros - 4,772 dias unicos</p>
+  <div id="dropZone" class="mt-8 border-2 border-dashed border-blue-400 rounded-xl p-10 text-center bg-blue-50 hover:bg-blue-100 cursor-pointer">
+    <p class="text-xl font-semibold">Arrastra aqui tu Excel de suplentes</p>
+    <p class="text-sm text-gray-500 mt-2">Matricula | Nombre | Fecha registro asistencia | Fec Ini1..Fin9 | Unidad</p>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" class="hidden">
+    <button class="mt-4 bg-blue-600 text-white px-6 py-2 rounded-lg">Seleccionar archivo</button>
+  </div>
+  <div id="dashboard" class="hidden mt-8">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div class="bg-white p-5 rounded-xl shadow"><p class="text-sm text-gray-500">Total checadas</p><p id="totalChecadas" class="text-2xl font-bold">0</p></div>
+      <div class="bg-white p-5 rounded-xl shadow"><p class="text-sm text-gray-500">Dias unicos</p><p id="diasUnicos" class="text-2xl font-bold">0</p></div>
+      <div class="bg-green-50 p-5 rounded-xl shadow border border-green-200"><p class="text-sm text-green-700">CON CONTRATO (SI PAGAR)</p><p id="conContrato" class="text-2xl font-bold text-green-600">0</p></div>
+      <div class="bg-red-50 p-5 rounded-xl shadow border border-red-200"><p class="text-sm text-red-700">SIN CONTRATO (NO PAGAR)</p><p id="sinContrato" class="text-2xl font-bold text-red-600">0</p></div>
+    </div>
+    <div class="mt-6 flex flex-wrap gap-3">
+      <input id="search" placeholder="Buscar matricula o nombre..." class="border rounded-lg px-4 py-2 w-64">
+      <select id="filtro" class="border rounded-lg px-4 py-2">
+        <option value="todos">Todos (9,129)</option>
+        <option value="SI">Solo CON CONTRATO (1,401)</option>
+        <option value="NO">Solo SIN CONTRATO (3,371)</option>
+      </select>
+      <button id="exportCon" class="bg-green-600 text-white px-4 py-2 rounded-lg">Exportar SI proceden</button>
+      <button id="exportSin" class="bg-red-600 text-white px-4 py-2 rounded-lg">Exportar SIN CONTRATO</button>
+      <button id="guardarD1" class="bg-blue-600 text-white px-4 py-2 rounded-lg">Guardar en Cloudflare D1</button>
+    </div>
+    <div class="mt-6 bg-white rounded-xl shadow overflow-hidden">
+      <div class="overflow-auto max-h-[600px]">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-100 sticky top-0"><tr><th class="p-3 text-left">Matricula</th><th class="p-3 text-left">Nombre</th><th class="p-3 text-left">Fecha Asist.</th><th class="p-3 text-left">Unidad</th><th class="p-3 text-left">Contrato</th><th class="p-3 text-left">Procede Pago</th></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+let datosValidados = [];
+function validarFecha(fechaAsist, row){
+  const fa = new Date(fechaAsist);
+  if(isNaN(fa)) return {tiene:false, contrato:"FECHA INVALIDA"};
+  for(let i=1;i<=9;i++){
+    const ini = row[`Fec Ini${i}`] ? new Date(row[`Fec Ini${i}`]) : null;
+    const fin = row[`Fec Fin${i}`] ? new Date(row[`Fec Fin${i}`]) : null;
+    if(ini && fin && !isNaN(ini) && !isNaN(fin)){
+      ini.setHours(0,0,0,0); fin.setHours(0,0,0,0); fa.setHours(0,0,0,0);
+      if(fa >= ini && fa <= fin){
+        return {tiene:true, contrato:`Contrato ${i} (${ini.toLocaleDateString()} al ${fin.toLocaleDateString()})`};
+      }
+    }
+  }
+  return {tiene:false, contrato:"SIN CONTRATO"};
+}
+document.getElementById('dropZone').addEventListener('click', ()=> document.getElementById('fileInput').click());
+document.getElementById('dropZone').addEventListener('dragover', e=>{ e.preventDefault(); });
+document.getElementById('dropZone').addEventListener('drop', e=>{ e.preventDefault(); handleFile(e.dataTransfer.files[0])});
+document.getElementById('fileInput').addEventListener('change', e=> handleFile(e.target.files[0]));
+function handleFile(file){
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    const data = new Uint8Array(e.target.result);
+    const workbook = XLSX.read(data, {type:'array'});
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(sheet);
+    datosValidados = json.map(r=>{
+      const fecha = r['Fecha registro asistencia'] || r['Fecha'] || '';
+      const valid = validarFecha(fecha, r);
+      return {
+        matricula: r['Matricula'] || '',
+        nombre: r['Nombre'] || '',
+        fecha_asistencia: fecha,
+        unidad: r['Unidad'] || '',
+        tiene_contrato: valid.tiene,
+        contrato_que_ampara: valid.contrato,
+        procede_pago: valid.tiene ? 'SI' : 'NO - NO PAGAR',
+        raw: r
+      };
+    });
+    render();
+  };
+  reader.readAsArrayBuffer(file);
+}
+function render(){
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  const filtro = document.getElementById('filtro').value;
+  const search = document.getElementById('search').value.toLowerCase();
+  let filtrados = datosValidados.filter(d=>{
+    if(filtro==='SI' && !d.tiene_contrato) return false;
+    if(filtro==='NO' && d.tiene_contrato) return false;
+    if(search && !(String(d.matricula).includes(search) || d.nombre.toLowerCase().includes(search))) return false;
+    return true;
+  });
+  const diasUnicos = new Set(datosValidados.map(d=> `${d.matricula}-${d.fecha_asistencia}`));
+  const con = datosValidados.filter(d=>d.tiene_contrato).length;
+  const sin = datosValidados.length - con;
+  document.getElementById('totalChecadas').textContent = datosValidados.length;
+  document.getElementById('diasUnicos').textContent = diasUnicos.size;
+  document.getElementById('conContrato').textContent = con;
+  document.getElementById('sinContrato').textContent = sin;
+  document.getElementById('dashboard').classList.remove('hidden');
+  filtrados.slice(0,500).forEach(d=>{
+    const tr = document.createElement('tr');
+    tr.className = d.tiene_contrato ? 'bg-green-50' : 'bg-red-50';
+    tr.innerHTML = `<td class="p-2">${d.matricula}</td><td class="p-2">${d.nombre}</td><td class="p-2">${new Date(d.fecha_asistencia).toLocaleDateString()}</td><td class="p-2">${d.unidad}</td><td class="p-2 text-xs">${d.contrato_que_ampara}</td><td class="p-2 font-bold ${d.tiene_contrato?'text-green-600':'text-red-600'}">${d.procede_pago}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+document.getElementById('search').addEventListener('input', render);
+document.getElementById('filtro').addEventListener('change', render);
+function exportar(soloCon){
+  const filtrados = datosValidados.filter(d=> soloCon ? d.tiene_contrato : !d.tiene_contrato);
+  const ws = XLSX.utils.json_to_sheet(filtrados);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, soloCon ? "SI_PROCEDEN" : "NO_PROCEDEN");
+  XLSX.writeFile(wb, soloCon ? "SI_proceden_pago.xlsx" : "NO_proceden_para_elaborar_contrato.xlsx");
+}
+document.getElementById('exportCon').addEventListener('click', ()=> exportar(true));
+document.getElementById('exportSin').addEventListener('click', ()=> exportar(false));
+document.getElementById('guardarD1').addEventListener('click', async ()=>{
+  const res = await fetch('/api/upload', { method:'POST', body: JSON.stringify(datosValidados), headers:{'Content-Type':'application/json'}});
+  const j = await res.json();
+  alert(`Guardado en D1: ${j.total} registros. Con: ${j.con_contrato}, Sin: ${j.sin_contrato}`);
+});
+</script>
+</body>
+</html>
