@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Validador IMSS Colima</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#f7f8fb;margin:0;padding:20px;color:#111}
+h1{margin:0 0 6px 0;font-size:26px}
+.sub{color:#6b7280;margin-bottom:18px}
+.drop{border:2px dashed #60a5fa;background:#eff6ff;border-radius:12px;padding:36px;text-align:center}
+.drop.dragover{background:#dbeafe}
+.btn{background:#2563eb;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-weight:600;cursor:pointer;margin:4px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}
+.card{background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.card b{font-size:22px;display:block}
+.green{background:#ecfdf5;border:1px solid #a7f3d0}
+.red{background:#fef2f2;border:1px solid #fecaca}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden}
+th{position:sticky;top:0;background:#f9fafb;text-align:left;padding:10px;font-size:13px}
+td{padding:8px 10px;font-size:13px;border-top:1px solid #f0f0f0}
+.no{color:#dc2626;font-weight:700}
+.si{color:#059669;font-weight:700}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+input[type=text],select{padding:9px 12px;border-radius:8px;border:1px solid #d1d5db}
+</style>
+</head>
+<body>
+<h1>Validador de Contratos Suplentes - IMSS Colima</h1>
+<div class="sub" id="subtitle">Opcion B - Cloudflare D1 | Valida 9,129 registros - 4,772 dias unicos</div>
+
+<div class="drop" id="drop">
+  <div style="font-size:18px;font-weight:700">Arrastra aqui tu Excel de suplentes</div>
+  <div style="color:#6b7280;margin:6px 0;font-size:14px">Matricula | Nombre | Fecha registro asistencia | Fec Ini1..Fin9 | Unidad</div>
+  <button class="btn" onclick="document.getElementById('file').click()">Seleccionar archivo</button>
+  <input type="file" id="file" accept=".xlsx,.xls" hidden>
+</div>
+
+<div class="cards">
+  <div class="card"><span>Total checadas</span><b id="t1">0</b></div>
+  <div class="card"><span>Dias unicos</span><b id="t2">0</b></div>
+  <div class="card green"><span style="color:#059669">CON CONTRATO (SI PAGAR)</span><b id="t3" style="color:#059669">0</b></div>
+  <div class="card red"><span style="color:#dc2626">SIN CONTRATO (NO PAGAR)</span><b id="t4" style="color:#dc2626">0</b></div>
+</div>
+
+<div class="controls">
+  <input type="text" id="q" placeholder="Buscar matricula o nombre..." style="flex:1;min-width:200px">
+  <select id="filtro"><option value="todos">Todos</option><option value="si">Solo CON CONTRATO</option><option value="no">Solo SIN CONTRATO</option></select>
+  <button class="btn" style="background:#16a34a" onclick="exportar('si')">Exportar SI proceden</button>
+  <button class="btn" style="background:#dc2626" onclick="exportar('no')">Exportar SIN CONTRATO</button>
+  <button class="btn" onclick="exportar('todos')">Exportar Todo Validado</button>
+</div>
+
+<div style="max-height:60vh;overflow:auto;border-radius:12px">
+<table id="tabla"><thead><tr>
+<th>Matricula</th><th>Nombre</th><th>Fecha Asist.</th><th>Unidad</th><th>Contrato</th><th>Procede Pago</th><th>Rango que cubre</th>
+</tr></thead><tbody></tbody></table>
+</div>
+
+<script>
+let DATA_UNICOS = [];
+let DATA_TODOS = [];
+
+function parseFechaAsist(v){
+  if(!v) return null;
+  if(v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  let s = String(v).trim();
+  // DD/MM/YYYY
+  let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if(m){ return new Date(+m[3], +m[2]-1, +m[1]); }
+  // YYYY-MM-DD
+  m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if(m){ return new Date(+m[1], +m[2]-1, +m[3]); }
+  let d = new Date(s);
+  if(!isNaN(d)) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return null;
+}
+function parseFecContrato(v){
+  if(!v) return null;
+  if(v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  let s = String(v).trim();
+  if(!s || s.toLowerCase()==='nan') return null;
+  s = s.substring(0,10);
+  let m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if(m) return new Date(+m[3], +m[2]-1, +m[1]);
+  let d = new Date(s);
+  if(!isNaN(d)) return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return null;
+}
+function fmt(d){ if(!d) return ''; return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`; }
+
+function procesar(workbook){
+  let sheet = workbook.Sheets[workbook.SheetNames[0]];
+  let rows = XLSX.utils.sheet_to_json(sheet, {defval:""});
+  console.log("Rows leidos", rows.length, Object.keys(rows[0]||{}));
+  
+  // Normalizar keys
+  let norm = rows.map(r=>{
+    // buscar columnas por nombre aproximado
+    let mat = r['Matricula'] || r['MATRICULA'] || r['matricula'] || Object.values(r)[0];
+    let nom = r['Nombre'] || r['NOMBRE'] || '';
+    let fecAsistRaw = r['Fecha registro asistencia'] || r['Fecha'] || r['FECHA'] || r['Fecha registro'] || '';
+    let unidad = r['Unidad'] || r['UNIDAD'] || '';
+    let rangos=[];
+    for(let i=1;i<=9;i++){
+      let ini = r[`Fec Ini${i}`] || r[`Fec Ini${i} `] || r[`Fec Ini${i}`.toLowerCase()] || r[`Fec Ini ${i}`] || r[`Ini${i}`] || '';
+      let fin = r[`Fec Fin${i}`] || r[`Fec Fin ${i}`] || r[`Fin${i}`] || '';
+      // tambien buscar sin espacio
+      if(!ini) ini = r[`Fec Ini${i}`.trim()] || '';
+      if(!fin) fin = r[`Fec Fin${i}`.trim()] || '';
+      // fallback: columnas por posicion si no hay nombres exactos
+      // tu excel tiene: Matricula,Nombre,Fecha,Hora,Unidad,Fec Ini1,Fin1,Ini2,Fin2...
+      // ya lo cubre el sheet_to_json con nombres Fec Ini1 etc
+      let di = parseFecContrato(ini);
+      let df = parseFecContrato(fin);
+      if(di && df) rangos.push({ini:di, fin:df, rawIni:ini, rawFin:fin});
+    }
+    let fAsist = parseFechaAsist(fecAsistRaw);
+    return {matricula:String(mat).trim(), nombre:nom, fechaRaw:fecAsistRaw, fecha:fAsist, unidad, rangos, original:r};
+  });
+
+  DATA_TODOS = norm;
+
+  // Validar cada fila: ¿fecha asistencia dentro de algun rango?
+  let validados = norm.map(o=>{
+    let ok=false, rangoOk=null;
+    if(o.fecha){
+      for(let r of o.rangos){
+        if(r.ini <= o.fecha && o.fecha <= r.fin){ ok=true; rangoOk=r; break; }
+      }
+    }
+    return {...o, conContrato:ok, rango:rangoOk};
+  });
+
+  // Deduplicar por Matricula + Fecha Asistencia (dia unico)
+  let map = new Map();
+  for(let v of validados){
+    if(!v.fecha) continue;
+    let key = v.matricula + "_" + v.fecha.toISOString().slice(0,10);
+    // si hay duplicado, priorizar el que SI tiene contrato
+    if(!map.has(key) || (v.conContrato && !map.get(key).conContrato)){
+      map.set(key, v);
+    }
+  }
+  DATA_UNICOS = Array.from(map.values());
+
+  // Stats
+  let total = rows.length;
+  let unicos = DATA_UNICOS.length;
+  let con = DATA_UNICOS.filter(x=>x.conContrato).length;
+  let sin = unicos - con;
+
+  document.getElementById('t1').textContent = total;
+  document.getElementById('t2').textContent = unicos;
+  document.getElementById('t3').textContent = con;
+  document.getElementById('t4').textContent = sin;
+  document.getElementById('subtitle').textContent = `Validados ${total} checadas - ${unicos} dias unicos - ${con} CON / ${sin} SIN`;
+  document.getElementById('filtro').options[0].text = `Todos (${unicos})`;
+  
+  renderTabla();
+}
+
+function renderTabla(){
+  let q = document.getElementById('q').value.toLowerCase();
+  let f = document.getElementById('filtro').value;
+  let tbody = document.querySelector('#tabla tbody');
+  tbody.innerHTML='';
+  let list = DATA_UNICOS;
+  if(f==='si') list = list.filter(x=>x.conContrato);
+  if(f==='no') list = list.filter(x=>!x.conContrato);
+  if(q) list = list.filter(x=> (x.matricula+x.nombre).toLowerCase().includes(q));
+  
+  // limitar a 1000 filas para no trabar
+  let slice = list.slice(0,1000);
+  for(let r of slice){
+    let tr=document.createElement('tr');
+    tr.style.background = r.conContrato ? '#f0fdf4' : '#fef2f2';
+    tr.innerHTML = `<td>${r.matricula}</td><td>${r.nombre}</td><td>${fmt(r.fecha)}</td><td>${r.unidad}</td><td>${r.conContrato?'CON CONTRATO':'SIN CONTRATO'}</td><td class="${r.conContrato?'si':'no'}">${r.conContrato?'SI - PAGAR':'NO - NO PAGAR'}</td><td>${r.rango? fmt(r.rango.ini)+' - '+fmt(r.rango.fin) : ''}</td>`;
+    tbody.appendChild(tr);
+  }
+  if(list.length>1000){
+    let tr=document.createElement('tr'); tr.innerHTML=`<td colspan="7" style="text-align:center;padding:12px;color:#6b7280">Mostrando 1000 de ${list.length} - Usa exportar para ver todo</td>`; tbody.appendChild(tr);
+  }
+}
+
+function exportar(tipo){
+  let list = DATA_UNICOS;
+  if(tipo==='si') list = list.filter(x=>x.conContrato);
+  if(tipo==='no') list = list.filter(x=>!x.conContrato);
+  let out = list.map(x=>({
+    Matricula:x.matricula,
+    Nombre:x.nombre,
+    'Fecha Asistencia':fmt(x.fecha),
+    Unidad:x.unidad,
+    Contrato: x.conContrato ? 'CON CONTRATO' : 'SIN CONTRATO',
+    'Procede Pago': x.conContrato ? 'SI - PAGAR' : 'NO - NO PAGAR',
+    'Rango Contrato': x.rango ? fmt(x.rango.ini)+' - '+fmt(x.rango.fin) : '',
+    'Fec Ini1': x.original['Fec Ini1']||'',
+    'Fec Fin1': x.original['Fec Fin1']||''
+  }));
+  let ws = XLSX.utils.json_to_sheet(out);
+  let wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "validado");
+  let name = tipo==='si' ? `SI_PROCEDE_${out.length}.xlsx` : tipo==='no' ? `SIN_CONTRATO_${out.length}.xlsx` : `VALIDADO_TODO_${out.length}.xlsx`;
+  XLSX.writeFile(wb, name);
+}
+
+// Drag & Drop
+const drop=document.getElementById('drop');
+drop.addEventListener('dragover', e=>{e.preventDefault(); drop.classList.add('dragover')});
+drop.addEventListener('dragleave', ()=>drop.classList.remove('dragover'));
+drop.addEventListener('drop', e=>{ e.preventDefault(); drop.classList.remove('dragover'); handleFile(e.dataTransfer.files[0]); });
+document.getElementById('file').addEventListener('change', e=>handleFile(e.target.files[0]));
+document.getElementById('q').addEventListener('input', renderTabla);
+document.getElementById('filtro').addEventListener('change', renderTabla);
+
+function handleFile(file){
+  if(!file) return;
+  let reader=new FileReader();
+  reader.onload = e=>{
+    let wb = XLSX.read(e.target.result, {type:'array', cellDates:true});
+    procesar(wb);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Auto-cargar si ya habias subido antes? No, solo manual
+</script>
+</body>
+</html>
